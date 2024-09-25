@@ -24,7 +24,6 @@ import { svgNS, svgG, createSVG, svgRect, svgText, svgLine } from './svg';
 import { setAttributes } from './dom';
 import { sanitizeColor, colorMatrix, categoryColors, rgbToHex, hexToHexColor } from './color';
 import { transpose } from './matrix';
-
 import Picker from 'vanilla-picker';
 import { labelColor, labelHoverColor } from './consts';
 import './assets/styles/hotmap.scss';
@@ -72,11 +71,21 @@ const metaFontSize = 14;
 // axis label offsets from the grid
 const xAxisLabelOffset = 50;
 const yAxisLabelOffset = 30;
+// Select the buttons
+const startLabelingBtn = document.getElementById("enable-labeling-btn");
+const saveLabelsBtn = document.getElementById("save-labels-btn");
+
+// Default and active colors
+const defaultColor = "";  // Default background color, can be set explicitly if needed
+const activeColor = "green";  // Green color when labeling is active
+
 
 export default class Hotmap {
+    static eventListenersAdded = false;
     constructor(params) {
         Hotmap.validateParams(params);
-
+        this.isLabeling = false;
+        this.labels = [];
         /**
          * BEGIN initialize params
          **/
@@ -158,8 +167,12 @@ export default class Hotmap {
 
         this.init().then(() => {
             this.start();
-        }, () => this.start());
-
+        }, () => {
+            this.start();
+        });
+    
+        this.setupLabelingEventListeners(); 
+    
         return this;
     }
 
@@ -255,7 +268,7 @@ export default class Hotmap {
     async start() {
         // base all positioning off of parent
         let [width, height] = this.getContainerSize();
-
+    
         let svgContainer = this.ele.querySelector('.svg-canvas');
         let obj = this.initSVGContainers(svgContainer, width, height);
         this.svg = obj.svg;
@@ -263,26 +276,26 @@ export default class Hotmap {
         this.yAxis = obj.yAxis;
         this.cAxis = obj.cAxis;
         this.scratchCanvas = obj.scratchCanvas;
-
+    
         // initialize scale x/y width controls
         this.scaleCtrl = this.initScaleCtr();
-
+    
         // setup search
         this.initSearch();
-
+    
         // add scrollBox.  we'll update size of content area on each render
         this.scrollBox = this.initScrollBox();
-
+    
         // add mouse tracker. we'll update the size of the area on render
         this.mouseTracker = this.initMouseTracker();
-
+    
         // init legend
         if (!this.opts.hideLegend) this.updateLegend();
-
+    
         // initialize options
         if (!this.opts.hideOptions)
             this.options = this.initOptions();
-
+    
         // optional tree (experimental)
         if (this.newick) {
             const Tree = await import(/* webpackChunkName: "hotmap-tree" */ './tree.js');
@@ -292,25 +305,59 @@ export default class Hotmap {
                 margin,
                 width: margin.left - this.yMetaWidth - 30
             });
-
+    
             margin.left = 400 + this.yMetaWidth + 50;
         }
-
+    
         let renderer = Hotmap.getRenderer(width, height);
         this.renderer = renderer;
-
+    
         this.initChart(true);
-
+    
         // adjust canvas on resize
         let resizeTO;
         window.addEventListener('resize', () => {
             clearTimeout(resizeTO);
             resizeTO = setTimeout(this.resize.bind(this), 100);
         });
-
+    
         // start tracking sorting
         this.sorter(this.svg);
+
     }
+    
+    // The new method to set up the event listeners for labeling buttons
+    setupLabelingEventListeners() {
+        // Check if event listeners have already been added
+        if (Hotmap.eventListenersAdded) return;
+        Hotmap.eventListenersAdded = true;
+        // Check if event listeners have already been added
+        if (this.eventListenersAdded) return;
+        this.eventListenersAdded = true;
+
+        console.log('Event listeners added'); // Add this line
+    
+        // Select the buttons
+        const startLabelingBtn = document.getElementById("enable-labeling-btn");
+        const saveLabelsBtn = document.getElementById("save-labels-btn");
+    
+        // Default and active colors
+        const defaultColor = "";  // Default background color
+        const activeColor = "green";  // Green color when labeling is active
+    
+        // Add event listener to "Start Labeling" button
+        startLabelingBtn.addEventListener("click", () => {
+            startLabelingBtn.style.backgroundColor = activeColor;
+            this.enableLabelingMode();
+        });
+    
+        // Add event listener to "Save Labels" button
+        saveLabelsBtn.addEventListener("click", () => {
+            startLabelingBtn.style.backgroundColor = defaultColor;
+            this.saveLabelsToJSON();
+        });
+    }
+    
 
     static getRenderer(width, height) {
         return new PIXI.Renderer({
@@ -420,6 +467,7 @@ export default class Hotmap {
      * @param {bool} scale should rescale (zoom / update cell dimensions)
      */
     _draw(renderX, renderY, scale) {
+
         this.clearStage(renderX, renderY, scale);
 
         // we'll compute the "viewsize" based on current container size;
@@ -470,16 +518,28 @@ export default class Hotmap {
                 // enforce bounds when scrolled and scaling
                 if (colIdx >= this.size.n) break;
 
-                // if sprites rendered, just making transformations
+                // Determine the color of the cell
+                let cellColor = this.colorMatrix[rowIdx][colIdx];
+
+                // Check if the cell is part of any label
+                let isLabeled = this.isCellInAnyLabel(rowIdx, colIdx);
+
+                if (isLabeled) {
+                    // Apply a highlight color (e.g., overlay with semi-transparent color)
+                    cellColor = this.applyHighlightColor(cellColor);
+                }
+
+                // Update or create the cell sprite
                 if (this.isStaged) {
                     let sprite = this.cells.children[i * xViewSize + j];
-                    sprite.tint = this.colorMatrix[rowIdx][colIdx];
+                    sprite.tint = cellColor;
                     sprite.visible = true;
                     sprite.position.set(x, y);
                     sprite.height = cellH;
                     sprite.width = cellW;
                 } else {
                     let sprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+                    sprite.tint = cellColor;
                     sprite.position.set(x, y);
                     sprite.height = cellH;
                     sprite.width = cellW;
@@ -575,35 +635,41 @@ export default class Hotmap {
     }
 
     initSVGContainers(el, width, height) {
+        // Remove existing SVG if present
+        const existingSVG = el.querySelector('svg');
+        if (existingSVG) existingSVG.remove();
+    
         let svg = createSVG();
         svg.style.position = 'absolute';
         svg.style.top = 0;
         svg.style.left = 0;
         svg.setAttribute('width', width);
         svg.setAttribute('height', height);
-
+    
         let xAxis = document.createElementNS(svgNS, 'g');
         xAxis.setAttribute('class', 'x-axis');
         xAxis.style.height = `${margin.top - 50}px`;
-
+    
         let yAxis = document.createElementNS(svgNS, 'g');
         yAxis.setAttribute('class', 'y-axis');
-
+    
         let cAxis = document.createElementNS(svgNS, 'g');
         cAxis.setAttribute('class', 'cat-axis');
         cAxis.style.height = `${margin.top - 50}px`;
-
+    
         svg.appendChild(xAxis);
         svg.appendChild(yAxis);
         svg.appendChild(cAxis);
         el.appendChild(svg);
-
-        // create hidden scratch canvas for measuring text size
-        let canvas = this.ele.appendChild(document.createElement('canvas'));
-        canvas.style.display = 'none';
-        let scratchCanvas = canvas.getContext('2d');
-
-        return {svg, xAxis, yAxis, cAxis, scratchCanvas};
+    
+        // Create or reuse scratch canvas
+        if (!this.scratchCanvas) {
+            let canvas = this.ele.appendChild(document.createElement('canvas'));
+            canvas.style.display = 'none';
+            this.scratchCanvas = canvas.getContext('2d');
+        }
+    
+        return {svg, xAxis, yAxis, cAxis, scratchCanvas: this.scratchCanvas};
     }
 
     /**
@@ -1648,114 +1714,352 @@ export default class Hotmap {
         };
     }
 
+    isCellInAnyLabel(rowIdx, colIdx) {
+        for (const label of this.labels) {
+            if (
+                rowIdx >= label.startRow &&
+                rowIdx <= label.endRow &&
+                colIdx >= label.startCol &&
+                colIdx <= label.endCol
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    applyHighlightColor(originalColor) {
+        // For simplicity, let's lighten the original color
+        // Convert the color to a hex string
+        let colorHex = PIXI.utils.hex2string(originalColor);
+    
+        // Convert hex color to RGB
+        let rgb = PIXI.utils.hex2rgb(originalColor);
+    
+        // Lighten the color by increasing each RGB component
+        let lightenFactor = 0.5; // Adjust between 0 (no change) and 1 (white)
+        let newRgb = rgb.map(component => component + (1 - component) * lightenFactor);
+    
+        // Convert back to hex
+        let newColor = PIXI.utils.rgb2hex(newRgb);
+    
+        return newColor;
+    }
+
+    createLabel(boundingBox) {
+        // Prompt the user for a label
+        let labelName = prompt("Enter label for the selected area:");
+    
+        // Create the label object with the provided coordinates and name
+        const label = {
+            startRow: boundingBox.startRow,
+            endRow: boundingBox.endRow,
+            startCol: boundingBox.startCol,
+            endCol: boundingBox.endCol,
+            name: labelName || "Custom Label"
+        };
+    
+        // Push the label into the labels array for later reference
+        this.labels.push(label);
+    
+        // Highlight the labeled area with a new color
+        this.highlightLabeledArea(label);
+    }
+
+    highlightLabeledArea(label) {
+    // Loop through the labeled area's rows and columns
+        for (let row = label.startRow; row <= label.endRow; row++) {
+            for (let col = label.startCol; col <= label.endCol; col++) {
+                // Get the current color in the colorMatrix for this cell
+                let currentColor = this.colorMatrix[row][col];
+
+                // Assuming currentColor is in hexadecimal format, convert it to RGB
+                let r = (currentColor >> 16) & 0xFF;
+                let g = (currentColor >> 8) & 0xFF;
+                let b = currentColor & 0xFF;
+
+                // Invert the color
+                let invertedColor = ((255 - r) << 16) | ((255 - g) << 8) | (255 - b);
+
+                // Update the colorMatrix with the inverted color
+                this.colorMatrix[row][col] = invertedColor;
+            }
+        }
+
+        // Trigger a redraw to reflect the updated colorMatrix
+        this._draw(true, true, true);
+    }
+    
+    addOverlaySprite(row, col, color, opacity) {
+        // Create a dedicated container for overlays if it doesn't exist
+        if (!this.overlayContainer) {
+            this.overlayContainer = new PIXI.Container();
+            this.chart.addChild(this.overlayContainer); // Add the overlay container to the main chart container
+        }
+    
+        // Calculate the position relative to the fixed matrix cells
+        const matrixX = col * this.cellW;  // X position relative to the matrix data
+        const matrixY = row * this.cellH;  // Y position relative to the matrix data
+    
+        // Create a new semi-transparent sprite for the overlay
+        const overlaySprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+        overlaySprite.tint = color;   // Set the overlay color
+        overlaySprite.alpha = opacity; // Set the overlay opacity
+    
+        // Position the overlay relative to the matrix cells (without scrolling)
+        overlaySprite.position.set(margin.left + matrixX, margin.top + matrixY);
+    
+        // Set the size of the overlay to match the matrix cell size
+        overlaySprite.width = this.cellW;
+        overlaySprite.height = this.cellH;
+    
+        // Add the overlay sprite to the overlay container (which does not scroll)
+        this.overlayContainer.addChild(overlaySprite);
+    }
+    
+    saveLabelsToJSON() {
+        // Prompt user for both label name and file name
+        const labelName = prompt('Enter the label name:', 'MyLabel');
+        const fileName = prompt('Enter the filename for saving the label (e.g., label.json):', `${labelName}.json`);
+    
+        // If the user cancels or doesn't provide names, exit early
+        if (!labelName || !fileName) {
+            alert('Save canceled.');
+            return;
+        }
+        else{
+            this.isLabeling = false;
+            this.disableLabelingMode();
+        }
+    
+        // Ensure the file name ends with .json
+        const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+    
+        // Create the label object with the provided label name
+        const labelData = {
+            name: labelName,
+            labels: this.labels,  // Assuming `this.labels` contains the label data
+            timestamp: new Date().toISOString()  // Optional: Add a timestamp
+        };
+    
+        // Prepare the JSON object to send to the server
+        const jsonContent = {
+            fileName: safeFileName,
+            data: labelData
+        };
+    
+        // Send the label data to the server to be saved in the /data/labels folder
+        fetch('http://localhost:3000/save-label', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(jsonContent)
+        })
+        .then(response => response.text().then(text => ({ status: response.status, text })))
+        .then(({ status, text }) => {
+            console.log('Server response:', text);
+            if (status === 200) {
+                alert(`Label successfully saved as "${safeFileName}"`);
+                this.isLabeling = false;
+                return
+            } else {
+                alert(`Failed to save label: ${text}`);
+            }
+        })
+        .catch(error => {
+            console.error('Error saving label:', error);
+            alert('An error occurred while saving the label.');
+        });
+    }
+    
+    
+    enableLabelingMode() {
+        this.isLabeling = true;
+    
+        // UI Button logic for saving labels
+        const saveButton = document.querySelector('#save-labels-btn');
+
+    }
+
+    highlightBoundingBox(selection) {
+        if (!this.isLabeling) return;
+    
+        let minRow = Math.min(...selection.map(s => s.rowID));
+        let maxRow = Math.max(...selection.map(s => s.rowID));
+        let minCol = Math.min(...selection.map(s => s.colID));
+        let maxCol = Math.max(...selection.map(s => s.colID));
+    
+        const box = {
+            x: minCol,
+            y: minRow,
+            width: maxCol - minCol + 1,
+            height: maxRow - minRow + 1
+        };
+    
+        this.drawBoundingBox(box);
+    }
+
+    // Update method to draw the rectangle
+    drawBoundingBox(box) {
+        this.clearBoundingBox();  // Remove any previous rectangle first
+    
+        const graphics = new PIXI.Graphics();
+        graphics.lineStyle(2, 0xFF0000, 1); // Red border with 2px thickness
+    
+        // Calculate pixel positions based on grid indices
+        const x = margin.left + box.x * this.cellW;
+        const y = margin.zop + box.y * this.cellH;
+        const width = box.width * this.cellW;
+        const height = box.height * this.cellH;
+    
+        graphics.drawRect(x, y, width, height);
+        graphics.name = 'bounding-box'; // Assign a name for easy removal
+    
+        this.chart.addChild(graphics);
+        this.renderer.render(this.chart);
+    }
+
+    updateBoundingBox(box) {
+        // Clear the previous rectangle
+        this.clearBoundingBox();
+    
+        // Create a new PIXI.Graphics object
+        const graphics = new PIXI.Graphics();
+    
+        // Set a simple line style for the rectangle
+        graphics.lineStyle(2, 0xFF0000, 1);
+    
+        // Draw the rectangle at the provided coordinates
+        graphics.drawRect(box.x, box.y, box.width, box.height);
+    
+        // Add the graphics to the chart (container)
+        this.chart.addChild(graphics);
+        this.chart.setChildIndex(graphics, this.chart.children.length - 1);  // Bring to front
+    
+        // Store a reference so it can be removed later
+        graphics.name = 'bounding-box';
+    
+        // Explicit render of the chart (in case the render loop is not running)
+        this.renderer.render(this.chart);
+    }
+
     selectable() {
         let box = {};
         let drag = false;
-
+    
         let scrollContainer = this.ele.querySelector('.scroll-container');
-
+    
         scrollContainer.onmousedown = (e) => {
             this.hideHoverEffects();
             const _x = e.offsetX - scrollContainer.scrollLeft,
-                _y = e.offsetY - scrollContainer.scrollTop;
-
-            // need cell position
-            const {x, y} = this.mousePosToCellPos(_x, _y);
-
-            // save start of box
+                  _y = e.offsetY - scrollContainer.scrollTop;
+    
+            // Get the cell position (relative to heatmap)
+            const { x, y } = this.mousePosToCellPos(_x, _y);
+    
+            // Save the start of the selection box
             box.x = x;
             box.y = y;
-
+    
             drag = true;
         };
-
+    
         scrollContainer.onmousemove = (e) => {
             if (!drag) return;
-
+    
             let _x = e.offsetX - scrollContainer.scrollLeft,
                 _y = e.offsetY - scrollContainer.scrollTop;
-
-            // todo: this is a hack to deal with hovering
-            // where the scrollBox normally would be
+    
+            // Prevent hover effects interfering
             if (_x < 0 || _y < 0) return;
-
-            // need cell position
-            let {x, y} = this.mousePosToCellPos(_x, _y);
-
+    
+            // Get the current cell position relative to the grid
+            let { x, y } = this.mousePosToCellPos(_x, _y);
+    
+            // Ensure the box stays within the heatmap view size
             if (y > yViewSize - 1) y = yViewSize - 1;
             if (x > xViewSize - 1) x = xViewSize - 1;
-
-            // save end of box (allowing any direction)
+    
+            // Save the end of the selection box (allowing selection in any direction)
             box.x2 = x;
             box.y2 = y;
             box.w = Math.abs(x - box.x);
             box.h = Math.abs(y - box.y);
-
+    
+            // Update the selection count display
             let countEl = this.ele.querySelector('.select-count');
             let count = (box.w + 1) * (box.h + 1);
             countEl.innerHTML = `${count} selected`;
-
+    
+            // Draw the selection box
             selectDraw();
         };
-
+    
         scrollContainer.onmouseup = () => {
             drag = false;
-
-            // otherwise, compute selection
+    
+            // Determine the selection start and end
             let i, j;
             if (box.x2 < box.x) i = this.yStart + box.y2;
             else i = this.yStart + box.y;
-
+    
             if (box.y2 < box.y) j = this.xStart + box.x2;
             else j = this.xStart + box.x;
-
-            // if width is not set, then this is actually a 'click' event
-            if (!box.h && box.h != 0 && this.onClick &&
-                ('x' in box && 'y' in box)) {
+    
+            // Handle click event if no drag happened (box width and height not set)
+            if (!box.h && box.h != 0 && this.onClick && 'x' in box && 'y' in box) {
                 this.onClick(this.getSelection(i, j, i, j).selection[0]);
                 return;
             }
-
+    
             let i2 = i + box.h,
                 j2 = j + box.w;
-
-            let {selection, rowIDs, colIDs} = this.getSelection(i, j, i2, j2);
-
-            // Fixme: this is a hack for scrollbar event triggering
+    
+            let { selection, rowIDs, colIDs } = this.getSelection(i, j, i2, j2);
+    
+            // Check for valid selection
             if (selection.length == 0) return;
-
+    
+            // Trigger selection event if callback exists
             if (this.onSelection) {
                 this.onSelection(selection, rowIDs, colIDs);
             }
-
+    
+            // Trigger the labeling function if labeling mode is active
+            if (this.isLabeling) {
+                const boundingBox = { startRow: i, endRow: i2, startCol: j, endCol: j2 };
+                this.createLabel(boundingBox); // Use the labeling function to create the label
+            }
+    
+            // Clear the selection box
             box = {};
             this.svg.querySelectorAll('.select-box').forEach(e => e.remove());
             this.ele.querySelector('.select-count').innerHTML = '';
         };
-
+    
         let selectDraw = () => {
             this.hideHoverEffects();
             this.svg.querySelectorAll('.select-box').forEach(e => e.remove());
-
-            // don't bother drawing if there's no callback
+    
+            // Don't draw if no selection handler is provided
             if (!this.onSelection) return;
-
-            // convert x and y to top left coordinates if needed
+    
+            // Convert x and y to top-left coordinates for the selection box
             let x, y;
             if (box.x2 < box.x) x = box.x2;
             else x = box.x;
-
+    
             if (box.y2 < box.y) y = box.y2;
             else y = box.y;
-
-            // compute size of box
-            x = margin.left + x * this.cellW;
-            y = margin.top + y * this.cellH;
-            let w = box.w < this.cellW
-                ? (box.w + 1) * this.cellW : box.w * this.cellW;
-            let h = box.h < this.cellH
-                ? (box.h + 1) * this.cellH : box.h * this.cellH;
-
+    
+            // Compute the size of the selection box
+            x = margin.left + (x - this.xStart) * this.cellW; // Correct for xStart offset
+            y = margin.top + (y - this.yStart) * this.cellH;  // Correct for yStart offset
+            let w = (box.w + 1) * this.cellW;
+            let h = (box.h + 1) * this.cellH;
+    
+            // Draw the selection rectangle
             let rect = svgRect(x, y, w, h, {
                 'class': 'select-box',
                 stroke: 'rgb(14, 135, 241)',
@@ -1763,6 +2067,52 @@ export default class Hotmap {
             });
             this.svg.appendChild(rect);
         };
+    }
+    
+
+    drawBoundingBox(box) {
+        this.clearBoundingBox();  // Remove any previous rectangle first
+    
+        const graphics = new PIXI.Graphics();
+        graphics.lineStyle(2, 0xFF0000, 1); // Adjust line style as needed
+    
+        // Correct the x and y positions to be relative to the heatmap's start
+        const x = (box.x - this.xStart) * this.cellW;  // Adjust by this.xStart to account for scrolling
+        const y = (box.y - this.yStart) * this.cellH;   // Adjust by this.yStart to account for scrolling
+        const width = box.width * this.cellW;
+        const height = box.height * this.cellH;
+    
+        // Draw the bounding box relative to the heatmap's position
+        graphics.drawRect(x, y, width, height);
+        graphics.name = 'bounding-box'; // Assign a name for easy reference
+    
+        this.chart.addChild(graphics);
+        this.renderer.render(this.chart);
+    }
+
+    // Clear any existing bounding box visuals
+    clearBoundingBox() {
+        const existingBox = this.chart.getChildByName('bounding-box');
+        if (existingBox) {
+            this.chart.removeChild(existingBox);
+            this.renderer.render(this.chart);
+        }
+    }
+
+    // Method to calculate selected rows and columns based on start and end positions
+    calculateSelectedGridArea(startX, startY) {
+        const startRow = Math.floor((startY - margin.top) / this.cellH);
+        const endRow = Math.floor((startY - margin.top) / this.cellH);
+        const startCol = Math.floor((startX - margin.left) / this.cellW);
+        const endCol = Math.floor((startX - margin.left) / this.cellW);
+
+        return { startRow, endRow, startCol, endCol };
+    }
+
+
+    // Add a method to disable labeling mode
+    disableLabelingMode() {
+        this.isLabeling = false;
     }
 
     static getMatrixStats(matrix) {
