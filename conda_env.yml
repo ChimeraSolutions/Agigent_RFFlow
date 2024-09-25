@@ -1,0 +1,19 @@
+name: hotmap_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - ca-certificates=2024.8.30=h56e8100_0
+  - nodejs=14.20.1=h57928b3_1
+  - openssl=3.3.2=h2466b09_0
+  - pip=24.2=py39haa95532_0
+  - python=3.9.19=h1aa4202_1
+  - setuptools=72.1.0=py39haa95532_0
+  - sqlite=3.45.3=h2bbff1b_0
+  - tzdata=2024a=h04d1e81_0
+  - ucrt=10.0.22621.0=h57928b3_0
+  - vc=14.40=h2eaa2aa_1
+  - vc14_runtime=14.40.33810=ha82c5b3_21
+  - vs2015_runtime=14.40.33810=h3bf8584_21
+  - wheel=0.44.0=py39haa95532_0
+prefix: C:\Users\marto\Anaconda3\envs\hotmap_env
