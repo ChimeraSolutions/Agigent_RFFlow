@@ -22,13 +22,15 @@ function demo() {
     ele.innerHTML = `<br>loading...`;
 
     let hotmap;
-    axios.get('./data/med.json')
+    axios.get('./data/big_data_matrix.json')
         .then(res => {
             let data = res.data;
             console.log('data provided to heatmap:', data);
 
             if (!SHOW_TREE) {
                 hotmap = pfExample({ele, data});
+
+
                 return;
             }
 
@@ -36,10 +38,13 @@ function demo() {
                 .then(res => {
                     res.text().then((newick) => {
                         hotmap = pfExample({ele, data, newick});
+
+
                     });
                 });
-        }).catch((e) => {
-            console.log(e);
+        })
+        .catch((e) => {
+            console.error('Error loading data:', e);
             alert(`Could not load viewer. Please contact owner.`);
         });
 
@@ -60,16 +65,31 @@ function demo() {
     };
 }
 
+function setupLabelingButtons(hotmap) {
+    const enableLabelingBtn = document.getElementById('enable-labeling-btn');
+    const saveLabelsBtn = document.getElementById('save-labels-btn');
+
+    // Enable labeling mode when the button is clicked
+    enableLabelingBtn.addEventListener('click', () => {
+        hotmap.enableLabelingMode();
+    });
+
+    // Save the labels when the "Save Labels" button is clicked
+    saveLabelsBtn.addEventListener('click', () => {
+        hotmap.saveLabelsToJSON();  // Assuming save method is defined in hotmap.js
+    });
+}
+
 
 function pfExample({ele, data, newick}) {
     let {rows, cols, matrix} = data;
-    let rowMetaLabels = ['Isolation Country', 'Host', 'Genome Group'];
+    let rowMetaLabels = ['Broadcast antenna 1', 'Host', 'Agigent field data'];
     let hotmap = new Hotmap({
         ele, rows, cols, matrix,
-        rowsLabel: 'Genomes',
-        colsLabel: 'Protein Families',
+        rowsLabel: 'Time (ms)',
+        colsLabel: 'Frequency  (Hz)',
         rowMetaLabels: rowMetaLabels,
-        colMetaLabels: ['Protein Family ID'],
+        colMetaLabels: ['Energy Density bin'],
         hideColMeta: true,
         options: {
             showVersion: true,
@@ -83,8 +103,8 @@ function pfExample({ele, data, newick}) {
         newick: newick,
         onHover: info => {
             let cs = info.rowMeta;
-            return `<div><b>Genome:</b> ${info.yLabel}</div><br>
-              <div><b>Protein Family:</b> ${info.xLabel}<div>
+            return `<div><b>RF Energy:</b> ${info.yLabel}</div><br>
+              <div><b>Energy Density:</b> ${info.xLabel}<div>
               <div><b>ID:</b> ${info.colMeta[0]}<div><br>
               <div><b>${rowMetaLabels[0]}:</b> ${cs && cs[0] != 'undefined' ? cs[0] : 'N/A'}</div>
               <div><b>${rowMetaLabels[1]}:</b> ${cs && cs[1] != 'undefined' ? cs[1] : 'N/A'}</div>
@@ -94,6 +114,9 @@ function pfExample({ele, data, newick}) {
         onSelection: selection => {
             alert(`Selected ${selection.length} cell(s)\n\n` +
                 JSON.stringify(selection, null, 4).slice(0, 10000));
+
+            // Highlight the bounding box around selected cells
+            hotmap.highlightBoundingBox(selection);
         },
         onClick: selection => {
             alert(JSON.stringify(selection, null, 4));
@@ -103,62 +126,3 @@ function pfExample({ele, data, newick}) {
     return hotmap;
 }
 
-function transcriptomicsExample({ele, data, newick}) {
-    let {rows, cols, matrix} = data;
-
-    let hotmap = new Hotmap({
-        ele, rows, cols, matrix,
-        rowsLabel: 'Genomes',
-        colsLabel: 'Protein Families',
-        options: {
-            legend: '⬆ red | black | green ⬇',
-        },
-        color: {
-            bins: [
-                '<-4', '<-3', '<-2', '<-1', '<0', '=0',
-                '<=1', '<=2', '<=3', '<=4', '>4'
-            ],
-            colors: [
-                0x00FF00, 0x00cc00, 0x009900, 0x006600, 0x003300, 0x000000,
-                0x330000, 0x660000, 0x990000, 0xcc0000, 0xFF0000
-            ]
-        },
-        newick: newick,
-        onSelection: selection => {
-            alert(`Selected ${selection.length} cell(s)\n\n` +
-                JSON.stringify(selection, null, 4).slice(0, 10000));
-        },
-        onClick: selection => {
-            alert(JSON.stringify(selection, null, 4));
-        }
-    });
-
-    return hotmap;
-}
-
-
-function pathwayExample({ele, data, newick}) {
-    let {rows, cols, matrix} = data;
-
-    let hotmap = new Hotmap({
-        ele, rows, cols, matrix,
-        rowsLabel: 'Protein Families',
-        colsLabel: 'Genomes',
-        color: {
-            bins: ['=0', '=1', '=2', '>=3'],
-            colors: [0x000000, 16440142, 16167991, 16737843]
-        },
-        options: {
-            theme: 'light'
-        },
-        onSelection: selection => {
-            alert(`Selected ${selection.length} cell(s)\n\n` +
-                JSON.stringify(selection, null, 4).slice(0, 10000));
-        },
-        onClick: selection => {
-            alert(JSON.stringify(selection, null, 4));
-        }
-    });
-
-    return hotmap;
-}
