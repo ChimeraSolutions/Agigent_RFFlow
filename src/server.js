@@ -6,9 +6,30 @@ const url = require('url');
 // Directory where labels will be saved
 const labelsDir = path.join(__dirname, 'data', 'labels');
 
+// Path to big_data_matrix.json
+const matrixFilePath = path.join(__dirname, 'data', 'big_data_matrix.json');
+
 // Ensure the labels directory exists
 if (!fs.existsSync(labelsDir)) {
     fs.mkdirSync(labelsDir, { recursive: true });
+}
+
+// Load the big_data_matrix.json once at the start
+let matrixData = [];
+try {
+    const matrixJson = fs.readFileSync(matrixFilePath, 'utf-8');
+    matrixData = JSON.parse(matrixJson).matrix;  // Assuming the matrix is under a `matrix` key
+} catch (error) {
+    console.error('Error loading big_data_matrix.json:', error);
+}
+
+// Function to extract a submatrix based on label coordinates
+function extractSubmatrix(matrix, startRow, endRow, startCol, endCol) {
+    let submatrix = [];
+    for (let i = startRow; i <= endRow; i++) {
+        submatrix.push(matrix[i].slice(startCol, endCol + 1));
+    }
+    return submatrix;
 }
 
 // Create the server
@@ -49,6 +70,13 @@ const server = http.createServer((req, res) => {
                     res.end('Missing file name or label data');
                     return;
                 }
+
+                // For each label, add the corresponding intensity matrix
+                data.labels = data.labels.map(label => {
+                    const { startRow, endRow, startCol, endCol } = label;
+                    const intensityMatrix = extractSubmatrix(matrixData, startRow, endRow, startCol, endCol);
+                    return { ...label, intensityMatrix };
+                });
 
                 // Path to save the JSON file
                 const filePath = path.join(labelsDir, fileName);
