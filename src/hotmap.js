@@ -2336,5 +2336,3 @@ export default class Hotmap {
     }
 
 }
-
-
